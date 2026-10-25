@@ -75,7 +75,19 @@ class ChannelService extends ChangeNotifier {
       return grouped;
     }
 
-    // 2. Curated Trending & Live Now row
+    // 2. High-priority Free Channels row
+    final freeList = channelsList.where((c) => !c.isPremium).take(20).toList();
+    if (freeList.isNotEmpty) {
+      grouped['Free Channels'] = freeList;
+    }
+
+    // 3. Premium Channels row (when enabled or browsing)
+    final premList = _allChannels.where((c) => c.isPremium).take(20).toList();
+    if (_showPremiumChannels && premList.isNotEmpty) {
+      grouped['Premium Channels'] = premList;
+    }
+
+    // 4. Curated Trending & Live Now row
     final featured = channelsList.take(15).toList();
     if (featured.isNotEmpty) {
       grouped['Trending & Live Now'] = featured;
@@ -121,7 +133,7 @@ class ChannelService extends ChangeNotifier {
   }
 
   List<String> get categories {
-    final list = <String>['ALL'];
+    final list = <String>['ALL', 'Favorites', 'Free', 'Premium'];
     const preferredOrder = [
       'Entertainment',
       'News',
@@ -198,8 +210,18 @@ class ChannelService extends ChangeNotifier {
   }
 
   List<Channel> get filteredChannels {
-    return allChannels.where((ch) {
+    final baseList = (_selectedCategory == 'Premium') ? _allChannels : allChannels;
+    return baseList.where((ch) {
       if (_filterOnlyFavorites && !ch.isFavorite) return false;
+      if (_selectedCategory == 'Favorites') {
+        return ch.isFavorite;
+      }
+      if (_selectedCategory == 'Free') {
+        return !ch.isPremium;
+      }
+      if (_selectedCategory == 'Premium') {
+        return ch.isPremium;
+      }
       if (_selectedCategory != 'ALL' && ch.category.toLowerCase() != _selectedCategory.toLowerCase()) {
         return false;
       }
@@ -236,7 +258,11 @@ class ChannelService extends ChangeNotifier {
 
   void selectCategory(String category) {
     _selectedCategory = category;
-    _filterOnlyFavorites = false;
+    if (category == 'Favorites') {
+      _filterOnlyFavorites = true;
+    } else {
+      _filterOnlyFavorites = false;
+    }
     notifyListeners();
   }
 

@@ -58,8 +58,13 @@ class _CatchupScreenState extends State<CatchupScreen> {
   }
 
   List<Channel> _getAvailableChannels() {
-    final all = widget.channelService.allChannels;
+    final all = (_selectedCategory == 'Premium')
+        ? widget.channelService.rawChannels
+        : widget.channelService.allChannels;
     if (_selectedCategory == 'ALL') return all;
+    if (_selectedCategory == 'Favorites') return all.where((c) => c.isFavorite).toList();
+    if (_selectedCategory == 'Free') return all.where((c) => !c.isPremium).toList();
+    if (_selectedCategory == 'Premium') return all.where((c) => c.isPremium).toList();
     return all.where((c) => c.category.toLowerCase() == _selectedCategory.toLowerCase()).toList();
   }
 

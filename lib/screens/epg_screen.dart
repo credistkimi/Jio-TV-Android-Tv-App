@@ -93,9 +93,17 @@ class _EpgScreenState extends State<EpgScreen> {
   }
 
   List<Channel> _getFilteredChannels() {
-    final all = widget.channelService.allChannels;
+    final all = (_selectedCategory == 'Premium')
+        ? widget.channelService.rawChannels
+        : widget.channelService.allChannels;
     return all.where((c) {
-      if (_selectedCategory != 'ALL' && c.category.toLowerCase() != _selectedCategory.toLowerCase()) {
+      if (_selectedCategory == 'Favorites') {
+        if (!c.isFavorite) return false;
+      } else if (_selectedCategory == 'Free') {
+        if (c.isPremium) return false;
+      } else if (_selectedCategory == 'Premium') {
+        if (!c.isPremium) return false;
+      } else if (_selectedCategory != 'ALL' && c.category.toLowerCase() != _selectedCategory.toLowerCase()) {
         return false;
       }
       if (_selectedLanguage != 'ALL' && c.language.toLowerCase() != _selectedLanguage.toLowerCase()) {

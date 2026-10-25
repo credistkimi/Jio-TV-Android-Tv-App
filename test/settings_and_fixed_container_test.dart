@@ -8,6 +8,7 @@ import 'package:jio_tv_plus_flutter/services/api_service.dart';
 import 'package:jio_tv_plus_flutter/services/channel_service.dart';
 import 'package:jio_tv_plus_flutter/services/storage_service.dart';
 import 'package:jio_tv_plus_flutter/theme/tv_dimensions.dart';
+import 'package:jio_tv_plus_flutter/widgets/tv_category_pill.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -143,6 +144,9 @@ void main() {
       expect(find.text('Add to Favorites'), findsOneWidget);
       expect(find.text('More Info'), findsOneWidget);
 
+      // Crucial requirement: Category pills widget is removed from For You screen
+      expect(find.byType(TvCategoryPill), findsNothing);
+
       // Category channel cards are rendered
       expect(find.text('Trending & Live Now'), findsWidgets);
       expect(find.text('Aaj Tak'), findsWidgets);
@@ -160,6 +164,15 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
 
       expect(find.text('Trending & Live Now'), findsWidgets);
+      expect(find.text('Aaj Tak'), findsWidgets);
+
+      // Controller Physics: Pressing UP from category 0 traverses up to Hero action buttons
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump(const Duration(milliseconds: 200));
+
+      // Controller Physics: Pressing DOWN from Hero action buttons returns to active channel card
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump(const Duration(milliseconds: 200));
       expect(find.text('Aaj Tak'), findsWidgets);
     });
   });

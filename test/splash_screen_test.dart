@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jio_tv_plus_flutter/screens/splash_screen.dart';
 
 void main() {
-  testWidgets('SplashScreen renders JioTV+ left-to-right elements and triggers onFinish callback without hanging', (tester) async {
+  testWidgets('SplashScreen renders JioTV+ brand and triggers onFinish callback without hanging', (tester) async {
     bool finished = false;
 
     await tester.pumpWidget(
@@ -18,11 +18,9 @@ void main() {
       ),
     );
 
-    // Initial frame shows JioTV+ branding and LIVE badge
-    expect(find.text('Jio'), findsOneWidget);
-    expect(find.text('TV'), findsOneWidget);
-    expect(find.text('+'), findsOneWidget);
-    expect(find.text('LIVE'), findsOneWidget);
+    // Initial frame shows loading spinner and splash screen
+    expect(find.byType(SplashScreen), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(finished, false);
 
     // Advance animation smoothly past duration

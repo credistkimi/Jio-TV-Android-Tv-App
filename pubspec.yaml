@@ -27,3 +27,4 @@ flutter:
   assets:
     - assets/channels.json
     - assets/audio/splash_sound.wav
+    - assets/images/

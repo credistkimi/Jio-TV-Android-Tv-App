@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">JioTV+</string>
+    <string name="live_input_label">JioTV+</string>
+    <string name="setup_title">JioTV+ Setup</string>
+</resources>

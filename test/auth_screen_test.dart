@@ -30,12 +30,13 @@ void main() {
       ),
     );
 
-    expect(find.text('Enter your Mobile Number'), findsOneWidget);
-    expect(find.text('Get OTP'), findsOneWidget);
+    expect(find.text('Login to JioTV+'), findsOneWidget);
+    expect(find.text('Enter your mobile number to continue'), findsOneWidget);
     expect(find.text('Explore as Guest'), findsOneWidget);
+    expect(find.byKey(const ValueKey('auth_submit_button')), findsOneWidget);
   });
 
-  testWidgets('AuthScreen D-Pad navigation and Get OTP button validation', (tester) async {
+  testWidgets('AuthScreen D-Pad navigation and submit arrow button validation', (tester) async {
     tester.view.physicalSize = const Size(1920, 1080);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(() {
@@ -62,12 +63,12 @@ void main() {
     // 1. Initial focus is on Key '1'
     expect(FocusManager.instance.primaryFocus?.debugLabel, contains('FirstNumpadKey'));
 
-    // 2. Tapping or pressing Get OTP with empty number triggers validation
-    await tester.tap(find.text('Get OTP'));
+    // 2. Tapping submit arrow with empty number triggers validation
+    await tester.tap(find.byKey(const ValueKey('auth_submit_button')));
     await tester.pump();
     expect(find.text('Please enter a complete 10-digit mobile number'), findsOneWidget);
 
-    // 3. Entering digits via on-screen numpad
+    // 3. Entering digits via on-screen circular numpad
     await tester.tap(find.text('9'));
     await tester.pump();
     await tester.tap(find.text('8'));

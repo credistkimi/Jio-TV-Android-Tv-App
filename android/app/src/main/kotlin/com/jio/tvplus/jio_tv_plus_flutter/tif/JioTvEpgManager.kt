@@ -2,9 +2,17 @@ package com.jio.tvplus.jio_tv_plus_flutter.tif
 
 import android.content.ContentProviderOperation
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.media.tv.TvContract
 import android.net.Uri
 import android.util.Log
@@ -12,11 +20,26 @@ import androidx.tvprovider.media.tv.Channel
 import androidx.tvprovider.media.tv.ChannelLogoUtils
 import androidx.tvprovider.media.tv.Program
 import androidx.tvprovider.media.tv.TvContractCompat
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
+
+data class ChannelSyncItem(
+    val internalId: String,
+    val channelName: String,
+    val logoUrl: String,
+    val tier: String,
+    val category: String
+)
 
 data class ChannelInfo(
     val id: Long,
@@ -95,6 +118,7 @@ class JioTvEpgManager(private val context: Context) {
             // Existing channels map: internalProviderId -> system channel row _id
             val existingChannels = getExistingChannelsMap()
             val operations = ArrayList<ContentProviderOperation>()
+            val syncItemList = ArrayList<ChannelSyncItem>()
 
             var insertedCount = 0
             var updatedCount = 0
@@ -111,10 +135,25 @@ class JioTvEpgManager(private val context: Context) {
                 val originalNetId = channelId.toIntOrNull() ?: channelNo
                 val category = item.optString("category", item.optString("channelCategoryId", "Entertainment"))
                 val language = item.optString("language", item.optString("channelLanguageId", "Hindi"))
-                val logoUrl = item.optString("logoUrl").ifEmpty {
-                    val logoName = item.optString("logoFilename", item.optString("logo", ""))
-                    if (logoName.isNotEmpty()) "https://jiotv.catchup.cdn.jio.com/dare_images/images/$logoName" else ""
+
+                // Free vs Premium tier detection based on price, is_premium, and business_type
+                val rawPrice = item.optString("channelPrice", "").trim()
+                val isPremium = item.optBoolean("is_premium", false) ||
+                    item.optString("business_type").equals("premium", ignoreCase = true) ||
+                    (rawPrice.isNotEmpty() && !rawPrice.equals("Free", ignoreCase = true))
+                val tier = if (isPremium) "Premium" else "Free"
+
+                // Robust channel logo resolution: ensure complete CDN URL
+                val rawLogo = item.optString("logoUrl").ifEmpty {
+                    item.optString("logoFilename", item.optString("logo", ""))
                 }
+                val logoUrl = when {
+                    rawLogo.isEmpty() -> ""
+                    rawLogo.startsWith("http://") || rawLogo.startsWith("https://") -> rawLogo
+                    else -> "https://jiotv.catchup.cdn.jio.com/dare_images/images/$rawLogo"
+                }
+
+                syncItemList.add(ChannelSyncItem(channelId, channelName, logoUrl, tier, category))
                 val streamUrl = item.optString("streamUrl", "")
 
                 // Fire TV Deep Link Intent URI: selecting channel in Fire TV UI launches app player directly
@@ -135,6 +174,9 @@ class JioTvEpgManager(private val context: Context) {
                     put("language", language)
                     put("streamUrl", streamUrl)
                     put("logoUrl", logoUrl)
+                    put("is_premium", isPremium)
+                    put("tier", tier)
+                    put("channelPrice", rawPrice)
                 }.toString()
 
                 val channelBuilder = Channel.Builder()
@@ -143,8 +185,8 @@ class JioTvEpgManager(private val context: Context) {
                     .setServiceType(TvContractCompat.Channels.SERVICE_TYPE_AUDIO_VIDEO)
                     .setDisplayNumber(channelNo.toString())
                     .setDisplayName(channelName)
-                    .setDescription("$category • $language • HD")
-                    .setNetworkAffiliation("JioTV+")
+                    .setDescription("$tier • $category • $language • HD")
+                    .setNetworkAffiliation(if (isPremium) "JioTV+ [Premium]" else "JioTV+ [Free]")
                     .setSearchable(true)
                     .setOriginalNetworkId(originalNetId)
                     .setInternalProviderId(channelId)
@@ -155,10 +197,16 @@ class JioTvEpgManager(private val context: Context) {
                     put(TvContract.Channels.COLUMN_TYPE, TvContract.Channels.TYPE_OTHER)
                     put(TvContract.Channels.COLUMN_SERVICE_TYPE, TvContract.Channels.SERVICE_TYPE_AUDIO_VIDEO)
                     put(TvContract.Channels.COLUMN_SEARCHABLE, 1)
-                    put(TvContract.Channels.COLUMN_BROWSABLE, 1)
                     put(TvContract.Channels.COLUMN_ORIGINAL_NETWORK_ID, originalNetId)
                     put(TvContract.Channels.COLUMN_APP_LINK_INTENT_URI, deepLinkUriString)
                     put(TvContract.Channels.COLUMN_INTERNAL_PROVIDER_DATA, internalData.toByteArray(Charsets.UTF_8))
+                    // CRITICAL: COLUMN_BROWSABLE and COLUMN_LOCKED are restricted to system apps.
+                    // If a third-party TV provider attempts to write to COLUMN_BROWSABLE,
+                    // Android throws java.lang.SecurityException: Not allowed to access Channels.COLUMN_BROWSABLE.
+                    remove(TvContract.Channels.COLUMN_BROWSABLE)
+                    remove("browsable")
+                    remove(TvContract.Channels.COLUMN_LOCKED)
+                    remove("locked")
                 }
 
                 val existingId = existingChannels[channelId]
@@ -195,11 +243,29 @@ class JioTvEpgManager(private val context: Context) {
             val totalSynced = insertedCount + updatedCount
             Log.i(TAG, "Fire TV EPG Sync completed: $insertedCount inserted, $updatedCount updated")
 
-            // Re-query and populate baseline programs (next 24h) for all channels
+            // Re-fetch system channel IDs for current input
+            val updatedMap = getExistingChannelsMap()
+            val pairedItems = ArrayList<Pair<Long, ChannelSyncItem>>()
+            for (syncItem in syncItemList) {
+                val sysId = updatedMap[syncItem.internalId]
+                if (sysId != null) {
+                    pairedItems.add(Pair(sysId, syncItem))
+                }
+            }
+
+            // 1. Sync Amazon TIF Extension Genres (Free / Premium / Content Category)
+            syncAmazonGenres(context, inputId, pairedItems)
+
+            // 2. Re-query and populate baseline programs (next 24h) for all channels
             syncDefaultProgramsForAllChannels()
 
-            // Save sync status in SharedPreferences
+            // 3. Save sync status in SharedPreferences
             saveSyncStatus(totalSynced)
+
+            // 4. Asynchronously populate logos in background (non-blocking for fast sync completion)
+            CoroutineScope(Dispatchers.IO).launch {
+                syncChannelLogos(context, pairedItems)
+            }
 
             return@withContext totalSynced
         } catch (e: Exception) {
@@ -486,10 +552,17 @@ class JioTvEpgManager(private val context: Context) {
             try {
                 context.assets.open(path).use { stream ->
                     val text = stream.bufferedReader().use { it.readText() }
-                    return parseJsonChannels(text)
+                    val array = parseJsonChannels(text)
+                    if (array != null && array.length() > 0) {
+                        Log.i(TAG, "Successfully loaded ${array.length()} channels from asset: $path")
+                        return array
+                    }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.d(TAG, "Could not load asset from $path: ${e.message}")
+            }
         }
+        Log.w(TAG, "Failed to load channels from all attempted asset paths")
         return null
     }
 
@@ -525,5 +598,164 @@ class JioTvEpgManager(private val context: Context) {
             "channelCount" to prefs.getInt(KEY_CHANNEL_COUNT, 0),
             "inputId" to inputId
         )
+    }
+
+    /**
+     * Attributes Amazon Fire TV TIF Extension genres (Free / Premium / Content Category)
+     * Reference: developer.amazon.com/docs/fire-tv/tv-input-framework-on-fire-tv.html
+     */
+    private fun syncAmazonGenres(
+        context: Context,
+        inputId: String,
+        items: List<Pair<Long, ChannelSyncItem>>
+    ) {
+        try {
+            val tifExtensionUri = Uri.parse("content://com.amazon.tv.livetv.tifextension/channel")
+            var count = 0
+            for ((systemId, item) in items) {
+                // 1. Primary Free or Premium category
+                try {
+                    val tierValues = ContentValues().apply {
+                        put("input_id", inputId)
+                        put("channel_id", systemId)
+                        put("genre", item.tier)
+                    }
+                    context.contentResolver.insert(tifExtensionUri, tierValues)
+                    count++
+                } catch (_: Exception) {}
+
+                // 2. Broadcast Category (e.g. Sports, News, Movies)
+                if (item.category.isNotEmpty() && !item.category.equals(item.tier, ignoreCase = true)) {
+                    try {
+                        val catValues = ContentValues().apply {
+                            put("input_id", inputId)
+                            put("channel_id", systemId)
+                            put("genre", item.category)
+                        }
+                        context.contentResolver.insert(tifExtensionUri, catValues)
+                    } catch (_: Exception) {}
+                }
+            }
+            Log.i(TAG, "Successfully synced Amazon TIF Extension genres ($count tier entries)")
+        } catch (e: Exception) {
+            Log.d(TAG, "Amazon TIF Extension provider not accessible: ${e.message}")
+        }
+    }
+
+    /**
+     * Ingests channel logos into content://android.media.tv/channel/{channelId}/logo.
+     * Android TV & Fire TV live guide tiles render icons directly from this content URI.
+     */
+    private suspend fun syncChannelLogos(
+        context: Context,
+        items: List<Pair<Long, ChannelSyncItem>>
+    ) = withContext(Dispatchers.IO) {
+        try {
+            val pending = items.filter { !hasChannelLogo(context, it.first) }
+            Log.i(TAG, "Starting logo ingestion: ${pending.size} channels require logos (${items.size - pending.size} already present)")
+
+            // Concurrently download and store logos in batches of 15
+            pending.chunked(15).forEach { chunk ->
+                coroutineScope {
+                    chunk.map { (systemId, item) ->
+                        async {
+                            downloadAndStoreLogo(context, systemId, item.logoUrl, item.channelName)
+                        }
+                    }.awaitAll()
+                }
+            }
+            Log.i(TAG, "Completed channel logo ingestion for all channels")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error synchronizing channel logos: ${e.message}")
+        }
+    }
+
+    private fun hasChannelLogo(context: Context, channelId: Long): Boolean {
+        val uri = TvContract.buildChannelLogoUri(channelId)
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { true } ?: false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private suspend fun downloadAndStoreLogo(
+        context: Context,
+        systemChannelId: Long,
+        logoUrl: String,
+        channelName: String
+    ) = withContext(Dispatchers.IO) {
+        try {
+            var bitmap: Bitmap? = null
+            if (logoUrl.isNotEmpty() && (logoUrl.startsWith("http://") || logoUrl.startsWith("https://"))) {
+                try {
+                    val url = URL(logoUrl)
+                    val conn = url.openConnection() as HttpURLConnection
+                    conn.connectTimeout = 3000
+                    conn.readTimeout = 3000
+                    conn.requestMethod = "GET"
+                    conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+                    if (conn.responseCode == HttpURLConnection.HTTP_OK) {
+                        conn.inputStream.use { stream ->
+                            bitmap = BitmapFactory.decodeStream(stream)
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Fall back to programmatic branded vector logo
+                }
+            }
+
+            val finalBitmap = bitmap ?: generateFallbackChannelLogo(channelName)
+            ChannelLogoUtils.storeChannelLogo(context, systemChannelId, finalBitmap)
+        } catch (e: Exception) {
+            Log.d(TAG, "Failed storing logo for channel $systemChannelId ($channelName): ${e.message}")
+        }
+    }
+
+    /**
+     * Programmatically generates a crisp 256x256 branded logo disk for immediate display
+     * in the Fire TV guide when remote logos are loading or unavailable.
+     */
+    private fun generateFallbackChannelLogo(channelName: String): Bitmap {
+        val size = 256
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+
+        // Rounded background disk in deep Jio blue
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#0A2885")
+            style = Paint.Style.FILL
+        }
+        val rect = RectF(12f, 12f, (size - 12).toFloat(), (size - 12).toFloat())
+        canvas.drawRoundRect(rect, 40f, 40f, bgPaint)
+
+        // Blue accent highlight border
+        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#0070F3")
+            style = Paint.Style.STROKE
+            strokeWidth = 6f
+        }
+        canvas.drawRoundRect(rect, 40f, 40f, borderPaint)
+
+        // Compute 2-4 letter initials from channel name (e.g. "Colors HD" -> "COL", "Sony Max" -> "MAX")
+        val words = channelName.trim().split("\\s+".toRegex()).filter { it.isNotEmpty() }
+        val initials = when {
+            words.size >= 2 -> words[0].take(2).uppercase() + words[1].take(2).uppercase()
+            words.isNotEmpty() -> words[0].take(4).uppercase()
+            else -> "JIO"
+        }
+
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = if (initials.length <= 3) 72f else 54f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+        }
+
+        val xPos = size / 2f
+        val yPos = (size / 2f) - ((textPaint.descent() + textPaint.ascent()) / 2f)
+        canvas.drawText(initials, xPos, yPos, textPaint)
+
+        return bitmap
     }
 }

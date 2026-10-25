@@ -10,7 +10,6 @@ import '../theme/tv_colors.dart';
 import '../theme/tv_dimensions.dart';
 import '../theme/tv_typography.dart';
 import '../widgets/tv_badge.dart';
-import '../widgets/tv_category_pill.dart';
 import '../widgets/tv_channel_logo.dart';
 import '../widgets/tv_focusable.dart';
 import '../widgets/tv_nav_bar.dart';
@@ -42,9 +41,21 @@ class _HomeScreenState extends State<HomeScreen> {
   // Active Category & Channel tracking for Row-Swapping Stage
   int _currentCategoryIndex = 0;
   int _currentChannelIndex = 0;
-  final List<FocusNode> _channelFocusNodes = [];
 
-  final ScrollController _categoryPillScrollController = ScrollController();
+  late final FocusNode _heroWatchLiveFocusNode;
+  late final FocusNode _heroFavoriteFocusNode;
+  late final FocusNode _heroInfoFocusNode;
+
+  final Map<String, FocusNode> _channelFocusNodes = {};
+
+  FocusNode _getChannelFocusNode(int categoryIndex, int channelIndex) {
+    final key = '$categoryIndex:$channelIndex';
+    return _channelFocusNodes.putIfAbsent(
+      key,
+      () => FocusNode(debugLabel: 'ChannelCard_${categoryIndex}_$channelIndex'),
+    );
+  }
+
   final ScrollController _channelRowScrollController = ScrollController();
 
   final int _heroCarouselIndex = 0;
@@ -52,6 +63,9 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _heroWatchLiveFocusNode = FocusNode(debugLabel: 'HeroWatchLive');
+    _heroFavoriteFocusNode = FocusNode(debugLabel: 'HeroFavorite');
+    _heroInfoFocusNode = FocusNode(debugLabel: 'HeroInfo');
     widget.channelService.addListener(_onChannelServiceChanged);
     _syncActiveChannel();
   }
@@ -61,11 +75,14 @@ class _HomeScreenState extends State<HomeScreen> {
     widget.channelService.removeListener(_onChannelServiceChanged);
     _previewDebounce?.cancel();
     _previewController?.dispose();
-    _categoryPillScrollController.dispose();
     _channelRowScrollController.dispose();
-    for (final node in _channelFocusNodes) {
+    _heroWatchLiveFocusNode.dispose();
+    _heroFavoriteFocusNode.dispose();
+    _heroInfoFocusNode.dispose();
+    for (final node in _channelFocusNodes.values) {
       node.dispose();
     }
+    _channelFocusNodes.clear();
     super.dispose();
   }
 
@@ -107,18 +124,21 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _updateFocusNodes(int count) {
-    while (_channelFocusNodes.length < count) {
-      final fn = FocusNode(debugLabel: 'ChannelCardNode_${_channelFocusNodes.length}');
-      _channelFocusNodes.add(fn);
-    }
-    while (_channelFocusNodes.length > count) {
-      _channelFocusNodes.removeLast().dispose();
-    }
+  void _focusActiveChannelCard() {
+    final grouped = _getFilteredGroupedChannels();
+    final categories = grouped.keys.toList();
+    if (categories.isEmpty) return;
+    final catName = categories[_currentCategoryIndex.clamp(0, categories.length - 1)];
+    final channels = grouped[catName] ?? [];
+    if (channels.isEmpty) return;
+
+    final targetIdx = _currentChannelIndex.clamp(0, channels.length - 1);
+    final node = _getChannelFocusNode(_currentCategoryIndex, targetIdx);
+    node.requestFocus();
   }
 
   /// Switch the active row to [newIndex] without scrolling the page down.
-  /// The slot at `| Category name | | Channle |` immediately becomes the new category.
+  /// The slot at `| Category name | | Channel |` immediately becomes the new category.
   void _changeCategory(int newIndex) {
     final categories = _getCategoryKeys();
     if (categories.isEmpty) return;
@@ -134,10 +154,9 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     if (channels.isNotEmpty) {
-      if (_currentChannelIndex >= channels.length) {
-        _currentChannelIndex = 0;
-      }
-      final newChannel = channels[_currentChannelIndex];
+      final targetIdx = _currentChannelIndex.clamp(0, channels.length - 1);
+      _currentChannelIndex = targetIdx;
+      final newChannel = channels[targetIdx];
       setState(() {
         _activeChannel = newChannel;
         _isVideoPlaying = false; // Show poster immediately
@@ -145,30 +164,15 @@ class _HomeScreenState extends State<HomeScreen> {
       _schedulePreviewForChannel(newChannel);
     }
 
-    _scrollToActiveCategoryPill(newIndex);
-
-    // Reset horizontal scroll of channel row and request focus on the channel card
+    // Smoothly focus channel card in the newly selected category row
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (_channelRowScrollController.hasClients) {
-        _channelRowScrollController.jumpTo(0);
-      }
-      if (_channelFocusNodes.isNotEmpty) {
-        final targetIdx = _currentChannelIndex.clamp(0, _channelFocusNodes.length - 1);
-        _channelFocusNodes[targetIdx].requestFocus();
+      if (channels.isNotEmpty) {
+        final targetIdx = _currentChannelIndex.clamp(0, channels.length - 1);
+        final node = _getChannelFocusNode(newIndex, targetIdx);
+        node.requestFocus();
       }
     });
-  }
-
-  void _scrollToActiveCategoryPill(int index) {
-    if (_categoryPillScrollController.hasClients) {
-      final target = (index * 135.0) - 100.0;
-      _categoryPillScrollController.animateTo(
-        target.clamp(0.0, _categoryPillScrollController.position.maxScrollExtent),
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOutCubic,
-      );
-    }
   }
 
   /// Triggered whenever remote D-Pad focus changes to another channel card.
@@ -412,18 +416,12 @@ class _HomeScreenState extends State<HomeScreen> {
               if (activeChannel != null)
                 _buildFixedHeroContainer(activeChannel),
 
-              const SizedBox(height: 6),
+              const SizedBox(height: 10),
 
-              // 3. CATEGORIES PILLS BAR (User Requirement: Maintains fixed keyline position)
-              // | Categories |
-              _buildCategoryPillsBar(categories),
-
-              const SizedBox(height: 6),
-
-              // 4. ROW-SWAPPING VIEWPORT STAGE (User Requirement: Maintains fixed keyline position)
+              // 3. ROW-SWAPPING VIEWPORT STAGE (User Requirement: Maintains fixed keyline position)
               // | Category name |
-              // | Channle |
-              // and other bottom Channle row shown based on height
+              // | Channel |
+              // and other bottom Channel row shown based on height
               Expanded(
                 child: categories.isEmpty
                     ? Center(
@@ -470,33 +468,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  /// Categories Horizontal Pills Bar
-  Widget _buildCategoryPillsBar(List<String> categories) {
-    return SizedBox(
-      height: 38,
-      child: ListView.separated(
-        controller: _categoryPillScrollController,
-        scrollDirection: Axis.horizontal,
-        clipBehavior: Clip.none,
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
-        itemCount: categories.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          final cat = categories[index];
-          final isSelected = index == _currentCategoryIndex;
-
-          return TvCategoryPill(
-            label: cat,
-            icon: _getCategoryIcon(cat),
-            isSelected: isSelected,
-            onPressed: () => _changeCategory(index),
-          );
-        },
       ),
     );
   }
@@ -636,104 +607,128 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(height: 10),
 
                       // Action Buttons (Matching Image 1: [Watch Live] [+ Add to Favorites] [More Info])
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        clipBehavior: Clip.none,
-                        child: Row(
-                          children: [
-                            // Watch Live Button (White pill button)
-                            TvFocusable(
-                              onPressed: () => widget.onOpenPlayer(channel),
-                              borderRadius: BorderRadius.circular(24),
-                              backgroundColor: Colors.white,
-                              focusedBackgroundColor: const Color(0xFFE50914),
-                              focusedBorderColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  HugeIcon(
-                                    icon: HugeIcons.strokeRoundedPlay,
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Watch Live Button (White pill button)
+                          TvFocusable(
+                            focusNode: _heroWatchLiveFocusNode,
+                            onPressed: () => widget.onOpenPlayer(channel),
+                            onKeyEvent: (node, event) {
+                              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+                              if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                                _focusActiveChannelCard();
+                                return KeyEventResult.handled;
+                              }
+                              return KeyEventResult.ignored;
+                            },
+                            borderRadius: BorderRadius.circular(24),
+                            backgroundColor: Colors.white,
+                            focusedBackgroundColor: const Color(0xFFE50914),
+                            focusedBorderColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                HugeIcon(
+                                  icon: HugeIcons.strokeRoundedPlay,
+                                  color: Colors.black,
+                                  size: 15,
+                                ),
+                                SizedBox(width: 6),
+                                Text(
+                                  'Watch Live',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w900,
                                     color: Colors.black,
-                                    size: 15,
                                   ),
-                                  SizedBox(width: 6),
-                                  Text(
-                                    'Watch Live',
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w900,
-                                      color: Colors.black,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 10),
+                          ),
+                          const SizedBox(width: 10),
 
-                            // Add to Favorites Button (Glass pill button)
-                            TvFocusable(
-                              onPressed: () {
-                                widget.channelService.toggleFavorite(channel);
-                                setState(() {});
-                              },
-                              borderRadius: BorderRadius.circular(24),
-                              backgroundColor: Colors.white.withValues(alpha: 0.12),
-                              focusedBackgroundColor: Colors.white.withValues(alpha: 0.25),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  HugeIcon(
-                                    icon: channel.isFavorite
-                                        ? HugeIcons.strokeRoundedStar
-                                        : HugeIcons.strokeRoundedPlusSign,
-                                    color: channel.isFavorite ? TvColors.reminderYellow : Colors.white,
-                                    size: 14,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    channel.isFavorite ? 'In Favorites' : 'Add to Favorites',
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-
-                            // More Info Button (Glass pill button)
-                            TvFocusable(
-                              onPressed: () => _showChannelInfoDialog(context, channel),
-                              borderRadius: BorderRadius.circular(24),
-                              backgroundColor: Colors.white.withValues(alpha: 0.12),
-                              focusedBackgroundColor: Colors.white.withValues(alpha: 0.25),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  HugeIcon(
-                                    icon: HugeIcons.strokeRoundedInformationCircle,
+                          // Add to Favorites Button (Glass pill button)
+                          TvFocusable(
+                            focusNode: _heroFavoriteFocusNode,
+                            onPressed: () {
+                              widget.channelService.toggleFavorite(channel);
+                              setState(() {});
+                            },
+                            onKeyEvent: (node, event) {
+                              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+                              if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                                _focusActiveChannelCard();
+                                return KeyEventResult.handled;
+                              }
+                              return KeyEventResult.ignored;
+                            },
+                            borderRadius: BorderRadius.circular(24),
+                            backgroundColor: Colors.white.withValues(alpha: 0.12),
+                            focusedBackgroundColor: Colors.white.withValues(alpha: 0.25),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                HugeIcon(
+                                  icon: channel.isFavorite
+                                      ? HugeIcons.strokeRoundedStar
+                                      : HugeIcons.strokeRoundedPlusSign,
+                                  color: channel.isFavorite ? TvColors.reminderYellow : Colors.white,
+                                  size: 14,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  channel.isFavorite ? 'In Favorites' : 'Add to Favorites',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
                                     color: Colors.white,
-                                    size: 14,
                                   ),
-                                  SizedBox(width: 6),
-                                  Text(
-                                    'More Info',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
+                          ),
+                          const SizedBox(width: 10),
+
+                          // More Info Button (Glass pill button)
+                          TvFocusable(
+                            focusNode: _heroInfoFocusNode,
+                            onPressed: () => _showChannelInfoDialog(context, channel),
+                            onKeyEvent: (node, event) {
+                              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+                              if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                                _focusActiveChannelCard();
+                                return KeyEventResult.handled;
+                              }
+                              return KeyEventResult.ignored;
+                            },
+                            borderRadius: BorderRadius.circular(24),
+                            backgroundColor: Colors.white.withValues(alpha: 0.12),
+                            focusedBackgroundColor: Colors.white.withValues(alpha: 0.25),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                HugeIcon(
+                                  icon: HugeIcons.strokeRoundedInformationCircle,
+                                  color: Colors.white,
+                                  size: 14,
+                                ),
+                                SizedBox(width: 6),
+                                Text(
+                                  'More Info',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -814,7 +809,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }) {
     final icon = _getCategoryIcon(categoryName);
     final isTrending = categoryName.toLowerCase().contains('trend') || categoryName.toLowerCase().contains('what');
-    _updateFocusNodes(channels.length);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -864,7 +858,8 @@ class _HomeScreenState extends State<HomeScreen> {
             controller: _channelRowScrollController,
             scrollDirection: Axis.horizontal,
             clipBehavior: Clip.none,
-            physics: const BouncingScrollPhysics(),
+            physics: const ClampingScrollPhysics(),
+            cacheExtent: 1500,
             padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
             itemCount: channels.length,
             separatorBuilder: (_, __) => const SizedBox(width: 14),
@@ -872,12 +867,13 @@ class _HomeScreenState extends State<HomeScreen> {
               final ch = channels[index];
               final prog = ch.activeProgram;
               final isCurrentActive = ch.channelId == _activeChannel?.channelId;
-              final fn = index < _channelFocusNodes.length ? _channelFocusNodes[index] : null;
+              final fn = _getChannelFocusNode(_currentCategoryIndex, index);
 
               return TvFocusable(
                 focusNode: fn,
                 autofocus: _currentCategoryIndex == 0 && index == 0,
                 scale: 1.02,
+                scrollAlignment: 0.18,
                 focusedBorderColor: TvColors.focusRingRed,
                 focusedGlowColor: TvColors.focusGlowRed,
                 onFocusChange: (hasF) {
@@ -886,11 +882,19 @@ class _HomeScreenState extends State<HomeScreen> {
                     _onChannelFocused(ch);
                   }
                 },
-                // Remote D-Pad Navigation Interception:
-                // DOWN -> Advance Current Row to Next Category without page scrolling
-                // UP -> Retreat Current Row to Previous Category (or exit up to Category Pills if at top)
+                // Remote D-Pad Navigation:
+                // DOWN -> Advance Current Row to Next Category smoothly
+                // UP -> Retreat Current Row to Previous Category (or exit up to Hero Action Buttons if at top)
                 onKeyEvent: (node, event) {
                   if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+                  // Prevent escaping past left/right ends of the row
+                  if (event.logicalKey == LogicalKeyboardKey.arrowLeft && index == 0) {
+                    return KeyEventResult.handled;
+                  }
+                  if (event.logicalKey == LogicalKeyboardKey.arrowRight && index == channels.length - 1) {
+                    return KeyEventResult.handled;
+                  }
 
                   if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
                     if (_currentCategoryIndex < totalCategories - 1) {
@@ -905,8 +909,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       _changeCategory(_currentCategoryIndex - 1);
                       return KeyEventResult.handled;
                     }
-                    // When on first category, allow UP to traverse up to Category Pills bar
-                    return KeyEventResult.ignored;
+                    // When on first category row, move focus UP to Hero banner action buttons
+                    _heroWatchLiveFocusNode.requestFocus();
+                    return KeyEventResult.handled;
                   }
 
                   return KeyEventResult.ignored;
@@ -1082,7 +1087,8 @@ class _HomeScreenState extends State<HomeScreen> {
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               clipBehavior: Clip.none,
-              physics: const BouncingScrollPhysics(),
+              physics: const ClampingScrollPhysics(),
+              cacheExtent: 1200,
               padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
               itemCount: channels.length,
               separatorBuilder: (_, __) => const SizedBox(width: 14),

@@ -13,15 +13,17 @@
     <uses-feature android:name="android.software.live_tv" android:required="true" />
 
     <application
-        android:label="JioTV+"
+        android:label="@string/app_name"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:banner="@mipmap/ic_launcher"
+        android:banner="@drawable/banner"
         android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:label="@string/app_name"
+            android:banner="@drawable/banner"
             android:launchMode="singleTop"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"
@@ -63,7 +65,7 @@
         <service
             android:name=".tif.JioTvInputService"
             android:exported="true"
-            android:label="JioTV+"
+            android:label="@string/live_input_label"
             android:permission="android.permission.BIND_TV_INPUT">
             <intent-filter>
                 <action android:name="android.media.tv.TvInputService" />
@@ -77,7 +79,7 @@
         <activity
             android:name=".tif.JioTvSetupActivity"
             android:exported="true"
-            android:label="JioTV+ Setup"
+            android:label="@string/setup_title"
             android:theme="@android:style/Theme.NoTitleBar"
             android:screenOrientation="sensorLandscape">
             <intent-filter>

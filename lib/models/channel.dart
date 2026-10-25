@@ -14,6 +14,7 @@ class Channel {
   final bool isHd;
   final bool isCatchup;
   final bool isPremium;
+  final String channelPrice;
   final String businessType;
   final int? stbChannelNumber;
   bool isFavorite;
@@ -33,6 +34,7 @@ class Channel {
     this.isHd = true,
     this.isCatchup = true,
     this.isPremium = false,
+    this.channelPrice = 'Free',
     this.businessType = 'free',
     this.stbChannelNumber,
     this.isFavorite = false,
@@ -139,7 +141,10 @@ class Channel {
 
     // businessType & isPremium
     final bizType = json['business_type']?.toString().toLowerCase() ?? 'free';
-    final isPrem = json['is_premium'] == true || bizType == 'premium';
+    final price = json['channelPrice']?.toString().trim() ?? '';
+    final isPrem = json['is_premium'] == true ||
+        bizType == 'premium' ||
+        (price.isNotEmpty && price.toLowerCase() != 'free');
 
     // isCatchup
     final isCatchup = json['isCatchupAvailable'] == true ||
@@ -159,6 +164,7 @@ class Channel {
       isHd: isHd,
       isCatchup: isCatchup,
       isPremium: isPrem,
+      channelPrice: price.isNotEmpty ? price : (isPrem ? 'Premium' : 'Free'),
       businessType: bizType,
       stbChannelNumber: stb,
       isFavorite: json['isFavorite'] == true,
