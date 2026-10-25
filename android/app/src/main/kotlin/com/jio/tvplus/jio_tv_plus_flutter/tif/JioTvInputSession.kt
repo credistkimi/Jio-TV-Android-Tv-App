@@ -102,8 +102,8 @@ class JioTvInputSession(
         currentChannelUri = channelUri
         Log.i(TAG, "Tuning channel in Fire TV UI: $channelUri")
 
-        // 1. Notify framework that video playback has started
-        notifyVideoStarted()
+        // 1. Notify framework that channel tuning is in progress
+        notifyVideoUnavailable(TvInputManager.VIDEO_UNAVAILABLE_REASON_TUNING)
 
         // 2. Parental Controls Check (Amazon Fire TV Guidelines)
         checkParentalControls()
