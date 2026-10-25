@@ -40,6 +40,11 @@ void main() {
 
   group('Settings Screen (AccountScreen) 2-Pane UI', () {
     testWidgets('Renders 2-pane settings layout with delay configuration and NO storage tab', (tester) async {
+      tester.view.physicalSize = const Size(1920, 1080);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
       SharedPreferences.setMockInitialValues({'jiotv_mobile_number': '9876543210'});
       final prefs = await SharedPreferences.getInstance();
       final storage = StorageService(prefs);
@@ -66,6 +71,7 @@ void main() {
       expect(find.text('Playback & Preview'), findsWidgets);
       expect(find.text('Account'), findsWidgets);
       expect(find.text('Channels & Guide'), findsOneWidget);
+      expect(find.text('Fire TV Live Guide'), findsOneWidget);
       expect(find.text('System & Diagnostics'), findsOneWidget);
 
       // Crucial requirement: No "Storage" tab

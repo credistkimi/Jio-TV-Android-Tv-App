@@ -12,6 +12,7 @@ import 'screens/search_screen.dart';
 import 'screens/splash_screen.dart';
 import 'services/api_service.dart';
 import 'services/channel_service.dart';
+import 'services/fire_tv_epg_service.dart';
 import 'services/storage_service.dart';
 import 'theme/tv_colors.dart';
 import 'widgets/tv_nav_bar.dart';
@@ -31,12 +32,14 @@ void main() async {
   final storageService = await StorageService.create();
   final apiService = ApiService();
   final channelService = ChannelService(apiService, storageService);
+  final fireTvEpgService = FireTvEpgService();
   await channelService.initialize();
 
   runApp(JioTvApp(
     storageService: storageService,
     apiService: apiService,
     channelService: channelService,
+    fireTvEpgService: fireTvEpgService,
   ));
 }
 
@@ -44,12 +47,14 @@ class JioTvApp extends StatelessWidget {
   final StorageService storageService;
   final ApiService apiService;
   final ChannelService channelService;
+  final FireTvEpgService fireTvEpgService;
 
   const JioTvApp({
     super.key,
     required this.storageService,
     required this.apiService,
     required this.channelService,
+    required this.fireTvEpgService,
   });
 
   @override
@@ -69,6 +74,7 @@ class JioTvApp extends StatelessWidget {
         storageService: storageService,
         apiService: apiService,
         channelService: channelService,
+        fireTvEpgService: fireTvEpgService,
       ),
     );
   }
@@ -78,6 +84,7 @@ class TvMainController extends StatefulWidget {
   final StorageService storageService;
   final ApiService apiService;
   final ChannelService channelService;
+  final FireTvEpgService fireTvEpgService;
   final bool showSplashOnInit;
   final Duration? splashDuration;
 
@@ -86,6 +93,7 @@ class TvMainController extends StatefulWidget {
     required this.storageService,
     required this.apiService,
     required this.channelService,
+    required this.fireTvEpgService,
     this.showSplashOnInit = true,
     this.splashDuration,
   });
@@ -108,10 +116,39 @@ class _TvMainControllerState extends State<TvMainController> {
     _showSplash = widget.showSplashOnInit;
     _globalKeyFocusNode = FocusNode(debugLabel: 'GlobalKeyFocus', canRequestFocus: false);
     widget.channelService.addListener(_onChannelServiceChanged);
+
+    // Register Amazon Fire TV Guide integration listeners
+    widget.fireTvEpgService.setOnChannelSelectedListener(_handleChannelFromFireTv);
+    _checkInitialChannelFromFireTv();
+
+    // Auto-sync channels to Fire TV Live Guide after launch
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget.channelService.rawChannels.isNotEmpty) {
+        widget.fireTvEpgService.syncChannelsToFireTv(widget.channelService.rawChannels);
+      }
+    });
+
     final token = widget.storageService.getSsoToken();
     if (token == null || token.isEmpty) {
       _currentScreen = TvNavDestination.auth;
     }
+  }
+
+  Future<void> _checkInitialChannelFromFireTv() async {
+    final chId = await widget.fireTvEpgService.getInitialChannelId();
+    if (chId != null && chId.isNotEmpty) {
+      _handleChannelFromFireTv(chId);
+    }
+  }
+
+  void _handleChannelFromFireTv(String channelId) {
+    final channels = widget.channelService.rawChannels;
+    if (channels.isEmpty) return;
+    final match = channels.firstWhere(
+      (c) => c.channelId == channelId || c.channelNo.toString() == channelId,
+      orElse: () => channels.first,
+    );
+    _openPlayer(match);
   }
 
   void _onChannelServiceChanged() {
@@ -276,6 +313,7 @@ class _TvMainControllerState extends State<TvMainController> {
       return AccountScreen(
         storageService: widget.storageService,
         channelService: widget.channelService,
+        fireTvEpgService: widget.fireTvEpgService,
         onSignOut: () async {
           await widget.storageService.clearAuth();
           setState(() => _currentScreen = TvNavDestination.auth);

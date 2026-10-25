@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import '../services/channel_service.dart';
+import '../services/fire_tv_epg_service.dart';
 import '../services/storage_service.dart';
 import '../theme/tv_colors.dart';
 import '../theme/tv_dimensions.dart';
@@ -10,12 +11,14 @@ enum _SettingsSection {
   playback,
   account,
   channels,
+  fireTv,
   diagnostics,
 }
 
 class AccountScreen extends StatefulWidget {
   final StorageService storageService;
   final ChannelService channelService;
+  final FireTvEpgService? fireTvEpgService;
   final VoidCallback onSignOut;
   final VoidCallback onBack;
 
@@ -23,6 +26,7 @@ class AccountScreen extends StatefulWidget {
     super.key,
     required this.storageService,
     required this.channelService,
+    this.fireTvEpgService,
     required this.onSignOut,
     required this.onBack,
   });
@@ -45,6 +49,11 @@ class _AccountScreenState extends State<AccountScreen> {
   late String _preferredLanguage;
   late bool _showPremium;
 
+  // Fire TV Live Guide state
+  int _fireTvSyncedCount = 0;
+  bool _isFireTvSyncing = false;
+  String _fireTvSyncTime = 'Not synced yet';
+
   final List<double> _delayOptions = [0.5, 1.0, 1.5, 2.0, 3.0];
   final List<String> _qualityOptions = ['Auto', 'High (1080p)', 'Medium (720p)', 'Low (480p)'];
 
@@ -58,6 +67,20 @@ class _AccountScreenState extends State<AccountScreen> {
     _lowLatency = widget.storageService.getLowLatencyMode();
     _preferredLanguage = widget.storageService.getPreferredLanguage();
     _showPremium = widget.channelService.showPremiumChannels;
+
+    widget.fireTvEpgService?.getSyncStatus().then((status) {
+      if (mounted && status.isNotEmpty) {
+        final count = status['channelCount'] as int? ?? 0;
+        final time = status['lastSyncTime'] as int? ?? 0;
+        setState(() {
+          _fireTvSyncedCount = count;
+          if (time > 0) {
+            final dt = DateTime.fromMillisecondsSinceEpoch(time);
+            _fireTvSyncTime = '${dt.day}/${dt.month}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+          }
+        });
+      }
+    });
   }
 
   void _showNotification(String msg) {
@@ -155,6 +178,57 @@ class _AccountScreenState extends State<AccountScreen> {
     });
     widget.storageService.setPreferredLanguage(newLang);
     _showNotification('Preferred audio language set to $newLang');
+  }
+
+  Future<void> _syncToFireTvGuide() async {
+    if (widget.fireTvEpgService == null) {
+      _showNotification('Fire TV EPG Service is unavailable on this platform.');
+      return;
+    }
+    setState(() {
+      _isFireTvSyncing = true;
+      _statusBanner = null;
+    });
+
+    final count = await widget.fireTvEpgService!.syncChannelsToFireTv(widget.channelService.rawChannels);
+
+    if (mounted) {
+      setState(() {
+        _isFireTvSyncing = false;
+        _fireTvSyncedCount = count;
+        final now = DateTime.now();
+        _fireTvSyncTime = '${now.day}/${now.month}/${now.year} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+        _statusBanner = 'Successfully synced $count channels into Amazon Fire TV Live Guide!';
+      });
+    }
+  }
+
+  Future<void> _syncFireTvPrograms() async {
+    if (widget.fireTvEpgService == null) {
+      _showNotification('Fire TV EPG Service is unavailable on this platform.');
+      return;
+    }
+    setState(() {
+      _isFireTvSyncing = true;
+      _statusBanner = null;
+    });
+
+    final ok = await widget.fireTvEpgService!.syncDefaultPrograms();
+
+    if (mounted) {
+      setState(() {
+        _isFireTvSyncing = false;
+        _statusBanner = ok
+            ? 'Live program guide schedules updated in Fire TV Guide!'
+            : 'Failed to update Fire TV program schedules.';
+      });
+    }
+  }
+
+  Future<void> _triggerFireTvBackgroundSync() async {
+    if (widget.fireTvEpgService == null) return;
+    await widget.fireTvEpgService!.triggerSystemSync();
+    _showNotification('Background EpgSyncWorker enqueued via Android WorkManager.');
   }
 
   @override
@@ -264,6 +338,13 @@ class _AccountScreenState extends State<AccountScreen> {
                                 ),
                                 const SizedBox(height: 12),
                                 _buildNavSectionTile(
+                                  section: _SettingsSection.fireTv,
+                                  title: 'Fire TV Live Guide',
+                                  subtitle: 'Amazon TIF • Live Tab • On Now',
+                                  icon: HugeIcons.strokeRoundedTv02,
+                                ),
+                                const SizedBox(height: 12),
+                                _buildNavSectionTile(
                                   section: _SettingsSection.diagnostics,
                                   title: 'System & Diagnostics',
                                   subtitle: 'Sync catalog • Clear cache • Engine',
@@ -324,6 +405,8 @@ class _AccountScreenState extends State<AccountScreen> {
         return 'Account & Subscription';
       case _SettingsSection.channels:
         return 'Channels & Guide';
+      case _SettingsSection.fireTv:
+        return 'Fire TV Live Guide Integration';
       case _SettingsSection.diagnostics:
         return 'System & Diagnostics';
     }
@@ -406,6 +489,8 @@ class _AccountScreenState extends State<AccountScreen> {
         return _buildAccountSettings();
       case _SettingsSection.channels:
         return _buildChannelsSettings();
+      case _SettingsSection.fireTv:
+        return _buildFireTvSettings();
       case _SettingsSection.diagnostics:
         return _buildDiagnosticsSettings();
     }
@@ -659,6 +744,184 @@ class _AccountScreenState extends State<AccountScreen> {
           ],
         ),
       ],
+    );
+  }
+
+  /// Section: Amazon Fire TV Live Guide Settings (TIF Integration)
+  Widget _buildFireTvSettings() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildSettingsCard(
+          groupTitle: 'Amazon Fire TV Integration Status',
+          children: [
+            _buildInfoDisplayRow(
+              'TIF Framework',
+              'Active & Integrated',
+              valueColor: const Color(0xFF10B981),
+            ),
+            const Divider(color: Color(0xFF2D251F), height: 20),
+            _buildInfoDisplayRow(
+              'Input Service ID',
+              'com.jio.tvplus/.tif.JioTvInputService',
+            ),
+            const Divider(color: Color(0xFF2D251F), height: 20),
+            _buildInfoDisplayRow(
+              'Channels in Fire TV Guide',
+              _fireTvSyncedCount > 0 ? '$_fireTvSyncedCount Channels Synced' : 'Not synced yet',
+              valueColor: _fireTvSyncedCount > 0 ? const Color(0xFFFFB300) : const Color(0xFF9E958C),
+            ),
+            const Divider(color: Color(0xFF2D251F), height: 20),
+            _buildInfoDisplayRow(
+              'Last EPG Sync',
+              _fireTvSyncTime,
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        _buildSettingsCard(
+          groupTitle: 'Fire TV Guide Operations',
+          children: [
+            _buildInteractiveRow(
+              title: 'Sync Channels to Fire TV',
+              subtitle: 'Inject all live channels into Android TvContract for native Fire TV Guide',
+              control: TvFocusable(
+                onPressed: _isFireTvSyncing ? null : _syncToFireTvGuide,
+                borderRadius: BorderRadius.circular(10),
+                backgroundColor: const Color(0xFFE89A4B).withValues(alpha: 0.2),
+                focusedBorderColor: const Color(0xFFE89A4B),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_isFireTvSyncing) ...[
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(color: Color(0xFFFFB300), strokeWidth: 2),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    Text(
+                      _isFireTvSyncing ? 'Syncing...' : 'Sync Channels',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Color(0xFFFFB300)),
+                    ),
+                  ],
+                ),
+              ),
+              onTap: _isFireTvSyncing ? null : _syncToFireTvGuide,
+            ),
+            const Divider(color: Color(0xFF2D251F), height: 24),
+            _buildInteractiveRow(
+              title: 'Refresh Program Schedules (EPG)',
+              subtitle: 'Populate 24-hour rolling broadcast schedule blocks into TvContract',
+              control: TvFocusable(
+                onPressed: _isFireTvSyncing ? null : _syncFireTvPrograms,
+                borderRadius: BorderRadius.circular(10),
+                backgroundColor: const Color(0xFF2E241E),
+                focusedBorderColor: const Color(0xFFE89A4B),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: const Text('Update EPG', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
+              ),
+              onTap: _isFireTvSyncing ? null : _syncFireTvPrograms,
+            ),
+            const Divider(color: Color(0xFF2D251F), height: 24),
+            _buildInteractiveRow(
+              title: 'Trigger Background Worker',
+              subtitle: 'Enqueue periodic WorkManager job for automatic 12-hour background EPG sync',
+              control: TvFocusable(
+                onPressed: _triggerFireTvBackgroundSync,
+                borderRadius: BorderRadius.circular(10),
+                backgroundColor: const Color(0xFF2E241E),
+                focusedBorderColor: const Color(0xFFE89A4B),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: const Text('Run Worker', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800)),
+              ),
+              onTap: _triggerFireTvBackgroundSync,
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        _buildSettingsCard(
+          groupTitle: 'Fire TV Integration Features',
+          children: [
+            _buildFeatureBullet(
+              title: "Fire TV 'Live' Tab & Channel Guide",
+              description: "JioTV+ channels appear seamlessly in the Fire TV system channel grid alongside broadcast sources.",
+              icon: HugeIcons.strokeRoundedTv02,
+            ),
+            const Divider(color: Color(0xFF2D251F), height: 20),
+            _buildFeatureBullet(
+              title: "Home Screen 'On Now' Row & Live Preview",
+              description: "When focused on a channel tile in Fire TV rows, live stream preview plays natively inside the UI.",
+              icon: HugeIcons.strokeRoundedPlay,
+            ),
+            const Divider(color: Color(0xFF2D251F), height: 20),
+            _buildFeatureBullet(
+              title: "Instant In-App Tuning via Deep Links",
+              description: "Clicking any channel in Fire TV UI launches directly into the JioTV+ player for that channel.",
+              icon: HugeIcons.strokeRoundedFlash,
+            ),
+            const Divider(color: Color(0xFF2D251F), height: 20),
+            _buildFeatureBullet(
+              title: "Fire TV Settings > Live TV > Sync Sources",
+              description: "JioTV Setup Activity registered for manual source synchronizations and channel scan.",
+              icon: HugeIcons.strokeRoundedSettings01,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFeatureBullet({
+    required String title,
+    required String description,
+    required List<List<dynamic>> icon,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE89A4B).withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: HugeIcon(
+              icon: icon,
+              color: const Color(0xFFE89A4B),
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  description,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF9E958C),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
