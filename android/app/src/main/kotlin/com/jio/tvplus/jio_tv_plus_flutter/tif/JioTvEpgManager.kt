@@ -142,7 +142,7 @@ class JioTvEpgManager(private val context: Context) {
                     .setDescription("$category • $language • HD")
                     .setNetworkAffiliation("JioTV+")
                     .setInternalProviderId(channelId)
-                    .setInternalProviderData(internalData)
+                    .setInternalProviderData(internalData.toByteArray(Charsets.UTF_8))
                     .setAppLinkIntent(appLinkIntent)
 
                 val contentValues = channelBuilder.build().toContentValues().apply {
@@ -261,7 +261,7 @@ class JioTvEpgManager(private val context: Context) {
                             .setStartTimeUtcMillis(start)
                             .setEndTimeUtcMillis(end)
                             .setCanonicalGenres(arrayOf(mapGenreToCanonical(desc)))
-                            .setInternalProviderData("prog_${internalId}_$start")
+                            .setInternalProviderData("prog_${internalId}_$start".toByteArray(Charsets.UTF_8))
                             .build()
 
                         programOperations.add(
@@ -315,7 +315,7 @@ class JioTvEpgManager(private val context: Context) {
                     .setEndTimeUtcMillis(p.endTimeUtcMillis)
                     .setPosterArtUri(if (p.posterArtUri.isNotEmpty()) Uri.parse(p.posterArtUri) else null)
                     .setCanonicalGenres(arrayOf(mapGenreToCanonical(p.genre)))
-                    .setInternalProviderData(p.programId)
+                    .setInternalProviderData(p.programId.toByteArray(Charsets.UTF_8))
                     .build()
 
                 operations.add(
@@ -368,7 +368,12 @@ class JioTvEpgManager(private val context: Context) {
             val internalId = c.getString(c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_INTERNAL_PROVIDER_ID)) ?: "$id"
             val chNo = c.getString(c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_DISPLAY_NUMBER))?.toIntOrNull() ?: 100
             val name = c.getString(c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_DISPLAY_NAME)) ?: "JioTV Channel"
-            val rawData = c.getString(c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_INTERNAL_PROVIDER_DATA))
+            val dataIndex = c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_INTERNAL_PROVIDER_DATA)
+            val rawData = try {
+                c.getString(dataIndex) ?: c.getBlob(dataIndex)?.let { String(it, Charsets.UTF_8) }
+            } catch (_: Exception) {
+                try { c.getBlob(dataIndex)?.let { String(it, Charsets.UTF_8) } } catch (_: Exception) { null }
+            }
 
             var streamUrl = ""
             var category = "Entertainment"
