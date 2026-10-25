@@ -4,35 +4,46 @@ import android.app.Activity
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.Gravity
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
  * Setup Activity launched when Fire TV user initiates "Sync Sources" under Settings > Live TV.
- * Reference: Amazon Fire TV Linear TV Integration Guide
+ * Matches Amazon reference implementation (RichTvInputSetupActivity).
+ * Reference:
  * - developer.amazon.com/docs/fire-tv/set-up-tvinputservice.html
  * - developer.amazon.com/docs/fire-tv/insert-your-first-channel.html
  */
-class JioTvSetupActivity : AppCompatActivity() {
+class JioTvSetupActivity : Activity() {
+
+    companion object {
+        private const val TAG = "JioTvSetupActivity"
+        private const val AUTO_EXIT_DELAY_MS = 2500L
+    }
 
     private val activityScope = CoroutineScope(Dispatchers.Main + Job())
-    private lateinit var statusTextView: TextView
-    private lateinit var countTextView: TextView
+    private val exitHandler = Handler(Looper.getMainLooper())
+
+    private lateinit var titleTextView: TextView
+    private lateinit var messageTextView: TextView
     private lateinit var progressBar: ProgressBar
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Leanback 10-foot TV dark UI
+        // Leanback 10-foot TV dark UI (No AppCompat dependency)
         val rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -40,68 +51,88 @@ class JioTvSetupActivity : AppCompatActivity() {
             setPadding(80, 60, 80, 60)
         }
 
-        val titleView = TextView(this).apply {
-            text = "JioTV+ Live TV Setup"
+        titleTextView = TextView(this).apply {
+            text = "Updating Channel Info"
             textSize = 28f
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 16)
         }
-        rootLayout.addView(titleView)
+        rootLayout.addView(titleTextView)
 
-        statusTextView = TextView(this).apply {
-            text = "Scanning and syncing Live TV channels to Fire TV Guide..."
+        messageTextView = TextView(this).apply {
+            text = "This may take a few minutes, please do not leave this screen"
             textSize = 18f
             setTextColor(Color.parseColor("#9CA3AF"))
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
         }
-        rootLayout.addView(statusTextView)
+        rootLayout.addView(messageTextView)
 
         progressBar = ProgressBar(this).apply {
-            layoutParams = LinearLayout.LayoutParams(600, 24).apply {
+            layoutParams = LinearLayout.LayoutParams(400, 24).apply {
                 gravity = Gravity.CENTER
                 bottomMargin = 24
             }
         }
         rootLayout.addView(progressBar)
 
-        countTextView = TextView(this).apply {
-            text = "Please wait..."
-            textSize = 15f
-            setTextColor(Color.parseColor("#3B82F6"))
-            gravity = Gravity.CENTER
-        }
-        rootLayout.addView(countTextView)
-
         setContentView(rootLayout)
 
-        // Start channel synchronization
-        startEpgSync()
+        startSync()
     }
 
-    private fun startEpgSync() {
+    private fun startSync() {
         activityScope.launch {
-            val epgManager = JioTvEpgManager(this@JioTvSetupActivity)
-            val syncedCount = withContext(Dispatchers.IO) {
-                epgManager.syncChannels()
+            try {
+                val epgManager = JioTvEpgManager(applicationContext)
+                val count = withContext(Dispatchers.IO) {
+                    epgManager.syncChannels()
+                }
+
+                if (count > 0) {
+                    showSuccess(count)
+                } else {
+                    showSuccess(0)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Channel sync failed", e)
+                showFailure()
             }
-
-            if (syncedCount > 0) {
-                statusTextView.text = "Sync Complete!"
-                countTextView.text = "Successfully added $syncedCount live channels to Fire TV Guide."
-                countTextView.setTextColor(Color.parseColor("#10B981"))
-            } else {
-                statusTextView.text = "Sync Finished"
-                countTextView.text = "Channels are up-to-date in Fire TV Guide."
-            }
-
-            // Brief delay to let the user see the success confirmation on TV screen
-            delay(1200)
-
-            setResult(Activity.RESULT_OK)
-            finish()
         }
+    }
+
+    private fun showSuccess(count: Int) {
+        progressBar.visibility = View.GONE
+        titleTextView.text = "Channel Sync Complete"
+        messageTextView.text = if (count > 0) {
+            "Successfully synced $count channels to Fire TV Guide. Exiting shortly..."
+        } else {
+            "Channels are up to date. Exiting shortly..."
+        }
+        messageTextView.setTextColor(Color.parseColor("#10B981"))
+        exitAfterDelay(Activity.RESULT_OK)
+    }
+
+    private fun showFailure() {
+        progressBar.visibility = View.GONE
+        titleTextView.text = "Channel Update Failed"
+        messageTextView.text = "Please check network and try again later. Exiting shortly..."
+        messageTextView.setTextColor(Color.parseColor("#EF4444"))
+        exitAfterDelay(Activity.RESULT_CANCELED)
+    }
+
+    private fun exitAfterDelay(resultCode: Int) {
+        exitHandler.postDelayed({
+            setResult(resultCode)
+            finish()
+        }, AUTO_EXIT_DELAY_MS)
+    }
+
+    override fun onDestroy() {
+        exitHandler.removeCallbacksAndMessages(null)
+        activityScope.cancel()
+        super.onDestroy()
     }
 }

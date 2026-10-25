@@ -109,6 +109,7 @@ class _TvMainControllerState extends State<TvMainController> {
   bool _isPlayerOpen = false;
   late bool _showSplash;
   late final FocusNode _globalKeyFocusNode;
+  bool _hasSyncedToFireTv = false;
 
   @override
   void initState() {
@@ -123,9 +124,7 @@ class _TvMainControllerState extends State<TvMainController> {
 
     // Auto-sync channels to Fire TV Live Guide after launch
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (widget.channelService.rawChannels.isNotEmpty) {
-        widget.fireTvEpgService.syncChannelsToFireTv(widget.channelService.rawChannels);
-      }
+      _checkAndSyncFireTv();
     });
 
     final token = widget.storageService.getSsoToken();
@@ -151,7 +150,15 @@ class _TvMainControllerState extends State<TvMainController> {
     _openPlayer(match);
   }
 
+  void _checkAndSyncFireTv() {
+    if (!_hasSyncedToFireTv && widget.channelService.rawChannels.isNotEmpty) {
+      _hasSyncedToFireTv = true;
+      widget.fireTvEpgService.syncChannelsToFireTv(widget.channelService.rawChannels);
+    }
+  }
+
   void _onChannelServiceChanged() {
+    _checkAndSyncFireTv();
     if (mounted) {
       setState(() {});
     }

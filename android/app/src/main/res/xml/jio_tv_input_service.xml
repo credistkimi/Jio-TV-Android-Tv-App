@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Amazon Fire TV Input Service Configuration -->
 <tv-input xmlns:android="http://schemas.android.com/apk/res/android"
-    android:setupActivity="com.jio.tvplus.jio_tv_plus_flutter.tif.JioTvSetupActivity"
-    android:settingsActivity="com.jio.tvplus.jio_tv_plus_flutter.tif.JioTvSetupActivity"
-    android:canRecord="false" />
+    android:canRecord="false"
+    android:setupActivity="com.jio.tvplus.jio_tv_plus_flutter.tif.JioTvSetupActivity" />

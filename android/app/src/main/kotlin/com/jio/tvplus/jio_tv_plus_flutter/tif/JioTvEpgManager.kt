@@ -9,6 +9,7 @@ import android.media.tv.TvContract
 import android.net.Uri
 import android.util.Log
 import androidx.tvprovider.media.tv.Channel
+import androidx.tvprovider.media.tv.ChannelLogoUtils
 import androidx.tvprovider.media.tv.Program
 import androidx.tvprovider.media.tv.TvContractCompat
 import kotlinx.coroutines.Dispatchers
@@ -91,7 +92,7 @@ class JioTvEpgManager(private val context: Context) {
                 return@withContext 0
             }
 
-            // Existing channels map: internalProviderId -> channelId
+            // Existing channels map: internalProviderId -> system channel row _id
             val existingChannels = getExistingChannelsMap()
             val operations = ArrayList<ContentProviderOperation>()
 
@@ -107,6 +108,7 @@ class JioTvEpgManager(private val context: Context) {
                     item.optString("channelName", "JioTV Channel $channelId")
                 }
                 val channelNo = item.optInt("channel_order", item.optInt("channelNo", 100 + i))
+                val originalNetId = channelId.toIntOrNull() ?: channelNo
                 val category = item.optString("category", item.optString("channelCategoryId", "Entertainment"))
                 val language = item.optString("language", item.optString("channelLanguageId", "Hindi"))
                 val logoUrl = item.optString("logoUrl").ifEmpty {
@@ -115,15 +117,17 @@ class JioTvEpgManager(private val context: Context) {
                 }
                 val streamUrl = item.optString("streamUrl", "")
 
-                // Fire TV Deep Link Intent URI: clicking channel in Guide launches app player directly
+                // Fire TV Deep Link Intent URI: selecting channel in Fire TV UI launches app player directly
                 val appLinkIntent = Intent(Intent.ACTION_VIEW).apply {
                     data = Uri.parse("jiotv://channel/$channelId")
                     setPackage(context.packageName)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
+                val deepLinkUriString = appLinkIntent.toUri(Intent.URI_INTENT_SCHEME)
 
-                // Internal provider data holding streaming details for Fire TV Preview playback
+                // Internal provider data holding streaming details & playbackDeepLinkUri for Fire TV
                 val internalData = JSONObject().apply {
+                    put("playbackDeepLinkUri", deepLinkUriString)
                     put("channelId", channelId)
                     put("channelName", channelName)
                     put("channelNo", channelNo)
@@ -135,23 +139,30 @@ class JioTvEpgManager(private val context: Context) {
 
                 val channelBuilder = Channel.Builder()
                     .setInputId(inputId)
-                    .setType(TvContractCompat.Channels.TYPE_PREVIEW)
+                    .setType(TvContractCompat.Channels.TYPE_OTHER)
                     .setServiceType(TvContractCompat.Channels.SERVICE_TYPE_AUDIO_VIDEO)
                     .setDisplayNumber(channelNo.toString())
                     .setDisplayName(channelName)
                     .setDescription("$category • $language • HD")
                     .setNetworkAffiliation("JioTV+")
+                    .setSearchable(true)
+                    .setOriginalNetworkId(originalNetId)
                     .setInternalProviderId(channelId)
                     .setInternalProviderData(internalData.toByteArray(Charsets.UTF_8))
                     .setAppLinkIntent(appLinkIntent)
 
                 val contentValues = channelBuilder.build().toContentValues().apply {
-                    put(TvContract.Channels.COLUMN_APP_LINK_INTENT_URI, appLinkIntent.toUri(Intent.URI_INTENT_SCHEME))
+                    put(TvContract.Channels.COLUMN_TYPE, TvContract.Channels.TYPE_OTHER)
+                    put(TvContract.Channels.COLUMN_SERVICE_TYPE, TvContract.Channels.SERVICE_TYPE_AUDIO_VIDEO)
+                    put(TvContract.Channels.COLUMN_SEARCHABLE, 1)
+                    put(TvContract.Channels.COLUMN_BROWSABLE, 1)
+                    put(TvContract.Channels.COLUMN_ORIGINAL_NETWORK_ID, originalNetId)
+                    put(TvContract.Channels.COLUMN_APP_LINK_INTENT_URI, deepLinkUriString)
+                    put(TvContract.Channels.COLUMN_INTERNAL_PROVIDER_DATA, internalData.toByteArray(Charsets.UTF_8))
                 }
 
                 val existingId = existingChannels[channelId]
                 if (existingId != null) {
-                    // Update channel
                     val updateUri = TvContract.buildChannelUri(existingId)
                     operations.add(
                         ContentProviderOperation.newUpdate(updateUri)
@@ -160,7 +171,6 @@ class JioTvEpgManager(private val context: Context) {
                     )
                     updatedCount++
                 } else {
-                    // Insert channel
                     val insertUri = TvContract.Channels.CONTENT_URI
                     operations.add(
                         ContentProviderOperation.newInsert(insertUri)
@@ -253,20 +263,28 @@ class JioTvEpgManager(private val context: Context) {
                             else -> "$channelName Live Stream"
                         }
 
+                        val shortDesc = "Watch $channelName live on Fire TV."
+                        val longDesc = "Watch live uninterrupted broadcast of $channelName in HD quality on JioTV+ TV."
+
                         val program = Program.Builder()
                             .setChannelId(systemChannelId)
                             .setTitle(title)
                             .setEpisodeTitle("Live Broadcast")
-                            .setDescription("Watch live uninterrupted broadcast of $channelName in HD quality on JioTV+ TV.")
+                            .setDescription(longDesc)
                             .setStartTimeUtcMillis(start)
                             .setEndTimeUtcMillis(end)
                             .setCanonicalGenres(arrayOf(mapGenreToCanonical(desc)))
                             .setInternalProviderData("prog_${internalId}_$start".toByteArray(Charsets.UTF_8))
                             .build()
 
+                        val programValues = program.toContentValues().apply {
+                            put(TvContract.Programs.COLUMN_SHORT_DESCRIPTION, shortDesc)
+                            put(TvContract.Programs.COLUMN_LONG_DESCRIPTION, longDesc)
+                        }
+
                         programOperations.add(
                             ContentProviderOperation.newInsert(TvContract.Programs.CONTENT_URI)
-                                .withValues(program.toContentValues())
+                                .withValues(programValues)
                                 .build()
                         )
                     }
@@ -318,9 +336,14 @@ class JioTvEpgManager(private val context: Context) {
                     .setInternalProviderData(p.programId.toByteArray(Charsets.UTF_8))
                     .build()
 
+                val programValues = program.toContentValues().apply {
+                    put(TvContract.Programs.COLUMN_SHORT_DESCRIPTION, p.description)
+                    put(TvContract.Programs.COLUMN_LONG_DESCRIPTION, p.description)
+                }
+
                 operations.add(
                     ContentProviderOperation.newInsert(TvContract.Programs.CONTENT_URI)
-                        .withValues(program.toContentValues())
+                        .withValues(programValues)
                         .build()
                 )
 
@@ -335,7 +358,7 @@ class JioTvEpgManager(private val context: Context) {
                 operations.clear()
             }
 
-            Log.i(TAG, "Synced ${programs.size} EPG programs for channel $internalChannelId")
+            Log.i(TAG, "Synced ${programs.size} detailed programs for channel $internalChannelId")
             return@withContext programs.size
         } catch (e: Exception) {
             Log.e(TAG, "Error syncing programs for channel $internalChannelId: ${e.message}", e)
@@ -344,10 +367,10 @@ class JioTvEpgManager(private val context: Context) {
     }
 
     /**
-     * Retrieves channel information given its TvContract content URI.
+     * Retrieves channel metadata from TvContract using a Content URI.
      */
     fun getChannelByUri(channelUri: Uri): ChannelInfo? {
-        val cursor: Cursor? = context.contentResolver.query(
+        val cursor = context.contentResolver.query(
             channelUri,
             arrayOf(
                 TvContract.Channels._ID,
@@ -365,14 +388,19 @@ class JioTvEpgManager(private val context: Context) {
             if (!c.moveToFirst()) return null
 
             val id = c.getLong(c.getColumnIndexOrThrow(TvContract.Channels._ID))
-            val internalId = c.getString(c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_INTERNAL_PROVIDER_ID)) ?: "$id"
+            val internalId = c.getString(c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_INTERNAL_PROVIDER_ID)) ?: ""
             val chNo = c.getString(c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_DISPLAY_NUMBER))?.toIntOrNull() ?: 100
             val name = c.getString(c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_DISPLAY_NAME)) ?: "JioTV Channel"
-            val dataIndex = c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_INTERNAL_PROVIDER_DATA)
+
             val rawData = try {
-                c.getString(dataIndex) ?: c.getBlob(dataIndex)?.let { String(it, Charsets.UTF_8) }
+                val blob = c.getBlob(c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_INTERNAL_PROVIDER_DATA))
+                if (blob != null) String(blob, Charsets.UTF_8) else null
             } catch (_: Exception) {
-                try { c.getBlob(dataIndex)?.let { String(it, Charsets.UTF_8) } } catch (_: Exception) { null }
+                try {
+                    c.getString(c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_INTERNAL_PROVIDER_DATA))
+                } catch (_: Exception) {
+                    null
+                }
             }
 
             var streamUrl = ""
@@ -421,21 +449,26 @@ class JioTvEpgManager(private val context: Context) {
 
     private fun getExistingChannelsMap(): Map<String, Long> {
         val map = HashMap<String, Long>()
+        val channelsUri = TvContract.buildChannelsUriForInput(inputId)
         val cursor = context.contentResolver.query(
-            TvContract.Channels.CONTENT_URI,
-            arrayOf(TvContract.Channels._ID, TvContract.Channels.COLUMN_INTERNAL_PROVIDER_ID),
-            "${TvContract.Channels.COLUMN_INPUT_ID}=?",
-            arrayOf(inputId),
+            channelsUri,
+            arrayOf(TvContract.Channels._ID, TvContract.Channels.COLUMN_INTERNAL_PROVIDER_ID, TvContract.Channels.COLUMN_ORIGINAL_NETWORK_ID),
+            null,
+            null,
             null
         )
         cursor?.use { c ->
             val idIndex = c.getColumnIndexOrThrow(TvContract.Channels._ID)
-            val internalIdIndex = c.getColumnIndexOrThrow(TvContract.Channels.COLUMN_INTERNAL_PROVIDER_ID)
+            val internalIdIndex = c.getColumnIndex(TvContract.Channels.COLUMN_INTERNAL_PROVIDER_ID)
+            val originalNetIdIndex = c.getColumnIndex(TvContract.Channels.COLUMN_ORIGINAL_NETWORK_ID)
             while (c.moveToNext()) {
-                val internalId = c.getString(internalIdIndex)
+                val internalId = if (internalIdIndex >= 0) c.getString(internalIdIndex) else null
+                val originalNetId = if (originalNetIdIndex >= 0) c.getInt(originalNetIdIndex) else null
                 val id = c.getLong(idIndex)
                 if (!internalId.isNullOrEmpty()) {
                     map[internalId] = id
+                } else if (originalNetId != null && originalNetId > 0) {
+                    map[originalNetId.toString()] = id
                 }
             }
         }
@@ -448,6 +481,7 @@ class JioTvEpgManager(private val context: Context) {
             "assets/channels.json",
             "channels.json"
         )
+
         for (path in possiblePaths) {
             try {
                 context.assets.open(path).use { stream ->

@@ -5,13 +5,15 @@
     <!-- Amazon Fire TV & Android TV Input Framework (TIF) Permissions -->
     <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA" />
     <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="com.amazon.tv.permission.TIF_EXTENSION_ACCESS" />
 
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-    <uses-feature android:name="android.software.leanback" android:required="false" />
-    <uses-feature android:name="android.software.live_tv" android:required="false" />
+    <uses-feature android:name="android.software.leanback" android:required="true" />
+    <uses-feature android:name="android.software.live_tv" android:required="true" />
 
     <application
-        android:label="JioTV+ TV"
+        android:label="JioTV+"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:banner="@mipmap/ic_launcher"
@@ -56,11 +58,13 @@
             </intent-filter>
         </activity>
 
-        <!-- Amazon Fire TV Input Service (TIF) -->
+        <!-- Amazon Fire TV Input Service (TIF)
+             CRITICAL: android:label provides the source name shown under Settings > Live TV > Sync Sources -->
         <service
             android:name=".tif.JioTvInputService"
-            android:permission="android.permission.BIND_TV_INPUT"
-            android:exported="true">
+            android:exported="true"
+            android:label="JioTV+"
+            android:permission="android.permission.BIND_TV_INPUT">
             <intent-filter>
                 <action android:name="android.media.tv.TvInputService" />
             </intent-filter>
@@ -69,11 +73,12 @@
                 android:resource="@xml/jio_tv_input_service" />
         </service>
 
-        <!-- Fire TV Sync Sources Setup Activity -->
+        <!-- Fire TV Sync Sources Setup Activity (Launched from Settings > Live TV > Sync Sources > JioTV+) -->
         <activity
             android:name=".tif.JioTvSetupActivity"
             android:exported="true"
-            android:theme="@style/Theme.AppCompat.NoActionBar"
+            android:label="JioTV+ Setup"
+            android:theme="@android:style/Theme.NoTitleBar"
             android:screenOrientation="sensorLandscape">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -86,6 +91,8 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.media.tv.action.INITIALIZE_PROGRAMS" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </receiver>

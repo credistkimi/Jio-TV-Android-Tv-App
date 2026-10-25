@@ -31,6 +31,15 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
         epgManager = JioTvEpgManager(applicationContext)
 
+        // Pre-populate Fire TV Guide database immediately on app startup
+        activityScope.launch(Dispatchers.IO) {
+            try {
+                epgManager.syncChannels()
+            } catch (e: Exception) {
+                Log.w(TAG, "Initial Fire TV channel sync on app startup: ${e.message}")
+            }
+        }
+
         // Schedule background EPG syncing
         EpgSyncWorker.enqueuePeriodic(applicationContext)
 
