@@ -272,6 +272,9 @@ build/app/outputs/flutter-apk/app-release.apk
 </details>
 
 ---
+[![Hits](https://seeyoufarm.com)](https://seeyoufarm.com)
+
+---
 
 ## ⚖️ Legal Disclaimer
 
@@ -286,3 +289,4 @@ build/app/outputs/flutter-apk/app-release.apk
 <p align="center">
   Made with ❤️ for Android TV & Fire TV users. If you find this project helpful, please consider starring ⭐ the repository!
 </p>
+
