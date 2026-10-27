@@ -272,9 +272,6 @@ build/app/outputs/flutter-apk/app-release.apk
 </details>
 
 ---
-[![Hits](https://seeyoufarm.com)](https://seeyoufarm.com)
-
----
 
 ## ⚖️ Legal Disclaimer
 
